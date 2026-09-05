@@ -1,0 +1,3 @@
+interface:
+  display_name: "ComfyUI Image Generation"
+  short_description: "Generate or edit images via the local ComfyUI Qwen server"

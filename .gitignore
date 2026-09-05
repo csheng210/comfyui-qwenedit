@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Test artifacts
+_selftest_dir/
+
+# Generated / user data
+input/
+output/
+
+# Keep directory structure with .gitkeep
+!input/.gitkeep
+!output/.gitkeep
