@@ -1,5 +1,5 @@
 ---
-name: comfyui-qwen-image-gen
+name: comfyui-qwen-image
 description: Generate or edit images via the local ComfyUI Qwen Image 2.1 server using comfyui_qwen_image_client.py. Covers text-to-image, single-image editing, 2-3 image composition, and background removal (RGBA transparency). Use for image generation, editing, or background-removal requests in the comfyui-qwenedit project.
 ---
 
