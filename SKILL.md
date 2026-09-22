@@ -1,6 +1,6 @@
 ---
 name: comfyui-qwen-image-gen
-description: Generate or edit images via the local ComfyUI Qwen Image 2.1 server using comfyui_qwen_image_client.py. Covers text-to-image, single-image editing, and 2-3 image composition. Use for image generation or editing requests in the comfyui-qwenedit project.
+description: Generate or edit images via the local ComfyUI Qwen Image 2.1 server using comfyui_qwen_image_client.py. Covers text-to-image, single-image editing, 2-3 image composition, and background removal (RGBA transparency). Use for image generation, editing, or background-removal requests in the comfyui-qwenedit project.
 ---
 
 # ComfyUI Qwen Image Generation
@@ -8,21 +8,22 @@ description: Generate or edit images via the local ComfyUI Qwen Image 2.1 server
 Drive the local ComfyUI Qwen Image 2.1 server through `comfyui_qwen_image_client.py` to produce an image: queue a workflow, wait for completion over WebSocket, then download the result.
 
 ## Prerequisites
-- Run from the current skill folder containing `comfyui_qwen_image_client.py`, the `1text_to_image.json` / `1image_to_image.json` / `2image_to_image.json` / `3image_to_image.json` workflows, and `input/` + `output/`. The script resolves paths relative to the current directory.
+- Run from the current skill folder containing `comfyui_qwen_image_client.py`, the `1text_to_image.json` / `1image_to_image.json` / `2image_to_image.json` / `3image_to_image.json` / `remove_image_background.json` workflows, and `input/` + `output/`. The script resolves paths relative to the current directory.
 - Interpreter (project virtualenv): Windows `.venv\Scripts\python.exe`; POSIX `.venv/bin/python`.
 - The ComfyUI server must be reachable. Base URL = `COMFYUI_BASE_URL` env var.
 
 ## How it works
-The workflow is chosen by the number of input images, then prompt/seed/size/images are filled in and one image is returned:
+The workflow is chosen by the number of input images (or by `--remove-bg` for background removal), then prompt/seed/size/images are filled in and one image is returned:
 
-| Images | Workflow | Mode |
-|---|---|---|
-| 0 | `1text_to_image.json` | text-to-image |
-| 1 | `1image_to_image.json` | single-image edit |
-| 2 | `2image_to_image.json` | 2-image composition |
-| 3 | `3image_to_image.json` | 3-image composition |
+| Trigger | Workflow | Mode | Needs |
+|---|---|---|---|
+| 0 images | `1text_to_image.json` | text-to-image | prompt |
+| 1 image | `1image_to_image.json` | single-image edit | image + prompt |
+| 2 images | `2image_to_image.json` | 2-image composition | images + prompt |
+| 3 images | `3image_to_image.json` | 3-image composition | images + prompt |
+| `--remove-bg` | `remove_image_background.json` | background removal (RGBA) | one image, no prompt |
 
-Images are ordered and cumulative: `--image2` needs `--image1`; `--image3` needs `--image1` + `--image2`. No images = text-to-image.
+Images are ordered and cumulative: `--image2` needs `--image1`; `--image3` needs `--image1` + `--image2`. No images = text-to-image. `--remove-bg` selects the removal workflow regardless of image count: it needs `--image1` only and rejects `--image2` / `--image3`.
 
 Image binding is slot-based: `--imageN` maps to the `images.image_N` input of the Qwen image-encode node. Missing LoadImage slots in a workflow JSON are created automatically by the script.
 
@@ -52,10 +53,17 @@ Three images:
 .venv\Scripts\python.exe comfyui_qwen_image_client.py --image1 a.png --image2 b.png --image3 c.png --prompt "combine these as described"
 ```
 
+Background removal (RGBA transparency; one image, no prompt):
+```
+.venv\Scripts\python.exe comfyui_qwen_image_client.py --remove-bg --image1 sofa.png --output WORKSPACE\output\sofa_nobg.png
+```
+Uses the Qwen Image 2.1 native RGBA output; `--prompt` is optional here (omit to keep the workflow's built-in "Remove the background, and output a PNG image"). The saved PNG carries a real alpha channel.
+
 ## Arguments
 | Flag | Required | Meaning |
 |---|---|---|
-| `--prompt` | yes | Text-to-image: generation description. Editing: how to use the other image(s) to process image 1. |
+| `--prompt` | yes, except with `--remove-bg` | Text-to-image: generation description. Editing: how to use the other image(s) to process image 1. Omit it for background removal. |
+| `--remove-bg` | no | Background-removal mode: needs `--image1`, no prompt; runs `remove_image_background.json` and outputs an RGBA PNG. |
 | `--image1` | no | Primary image (what is produced/edited from). Omit all images for text-to-image. |
 | `--image2`, `--image3` | no | Extra reference images (cumulative order). |
 | `--width`, `--height` | no | Output size (text-to-image only; default 1024x1024). With images, output follows the first input image. |
@@ -68,8 +76,10 @@ Input image resolution: for each `--imageN`, try (1) a local path (relative/abso
 
 ## Output
 The main result is saved to `--output` (preferred: under the current workspace `output/` so it displays in the Codex app) or the project root's `output/<timestamp>.png`; any extra saved images always go under the project root's `output/`. The last printed "輸出圖片:" path is the main result.
+In `--remove-bg` mode the main result is an RGBA PNG whose alpha channel already encodes the transparent background, so it composites cleanly onto any other background.
 
 ## Troubleshooting
 - `找不到 workflow 檔案` - not run from the project root (workflow JSONs not found by filename).
 - `找不到圖片 ...` - the image path/filename was not found locally, in `input/`, or on the server.
 - Connection / WebSocket errors - check `COMFYUI_BASE_URL` and that the ComfyUI server is running and reachable.
+- `--remove-bg` returns an (almost) fully transparent subject (alpha ~0, nothing visible): the Qwen RGBA path is unreliable for close-up / subject-heavy inputs with little background margin (e.g. portraits). Object shots with clear margins de-background cleanly. Re-run with a different `--seed`, or fall back to a dedicated matting tool for portraits.

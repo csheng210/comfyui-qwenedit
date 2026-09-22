@@ -10,9 +10,11 @@ ComfyUI API client — Qwen Image 2.1（workflow: 1text/1image/2image/3image_to_
     3. 已存在 ComfyUI input/ 的檔名；三者都沒有會報錯
   依輸入的圖片數量自動選擇 workflow：
     0 張 → 1text_to_image.json（純文生圖）
-    1 張 → 1image_to_image.json
+    1 張 → 1image_to_image.json（一張圖 + 一段提示詞）
     2 張 → 2image_to_image.json
     3 張 → 3image_to_image.json
+  另加 --remove-bg → remove_image_background.json：去背模式，
+    只要一張圖、不需要提示詞，用 Qwen Image 2.1 輸出帶透明背景的 RGBA PNG
 
   圖片以 images.image_1 / image_2 / image_3 槽位依序對應 --image1/2/3；
   workflow 裡沒接好的槽位會自動新增 LoadImage 節點補上。
@@ -69,6 +71,16 @@ WORKFLOW_CONFIG = {
         size_node=None,
     ),
 }
+
+# 去背模式（Qwen Image 2.1 原生 RGBA）：只要一張圖、不需要提示詞
+REMOVE_BG_CONFIG = dict(
+    file=Path("remove_image_background.json"),
+    prompt_node="459:474", prompt_field="prompt",
+    ksampler="459:458",
+    load_nodes=["470"],
+    size_node=None,
+)
+
 LOCAL_INPUT_DIR = Path("input")  # 專案裡的 input/ 資料夾
 OUTPUT_DIR = Path("output")
 
@@ -241,7 +253,8 @@ def parse_args():
     parser.add_argument("--image3", default=None, help="圖片3：本機路徑或 ComfyUI 檔名（參考圖，選用）")
     parser.add_argument("--width", type=int, default=None, help="輸出寬度（僅文生圖生效；預設 1024）")
     parser.add_argument("--height", type=int, default=None, help="輸出高度（僅文生圖生效；預設 1024）")
-    parser.add_argument("--prompt", required=True, help="提示詞：說明如何用其餘圖片處理圖1（必要）")
+    parser.add_argument("--prompt", default=None, help="提示詞：說明如何用其餘圖片處理圖1（編輯／合成時必要；去背模式可省略）")
+    parser.add_argument("--remove-bg", action="store_true", help="去背模式：搭配 --image1，用 remove_image_background.json 讓 Qwen Image 2.1 輸出帶透明背景的 RGBA PNG（不需要 --prompt）")
     parser.add_argument("--seed", type=int, default=-1, help="隨機種子；負數或省略=隨機")
     parser.add_argument("--output", default=None, help="輸出檔名/路徑（預設 output/時間戳.png）")
     return parser.parse_args()
@@ -258,7 +271,16 @@ def main():
 
     image_count = sum(v is not None for v in (args.image1, args.image2, args.image3))
 
-    cfg = WORKFLOW_CONFIG[image_count]
+    if args.remove_bg:
+        if args.image1 is None:
+            raise SystemExit("去背模式需要 --image1（要去除背景的圖片）")
+        if args.image2 is not None or args.image3 is not None:
+            raise SystemExit("去背模式只接受一張圖，請不要提供 --image2 / --image3")
+        cfg = REMOVE_BG_CONFIG
+    else:
+        if args.prompt is None:
+            raise SystemExit("請提供 --prompt（或使用 --remove-bg 進行去背）")
+        cfg = WORKFLOW_CONFIG[image_count]
     if not cfg["file"].is_file():
         raise SystemExit(f"找不到 workflow 檔案：{cfg['file']}")
 
@@ -280,7 +302,9 @@ def main():
     # 綁定輸入圖片（槽位 1~N 對應 images.image_N，缺的自動補 LoadImage 節點）
     created_nodes = bind_images(prompt, cfg["prompt_node"], input_images) if image_count else []
 
-    prompt[cfg["prompt_node"]]["inputs"][cfg["prompt_field"]] = args.prompt
+    # 有給提示詞才覆寫；去背模式若未給，沿用 workflow 內建的去背提示
+    if args.prompt is not None:
+        prompt[cfg["prompt_node"]]["inputs"][cfg["prompt_field"]] = args.prompt
     prompt[cfg["ksampler"]]["inputs"]["seed"] = seed
 
     if cfg["size_node"] is not None:
@@ -289,7 +313,8 @@ def main():
         size_str = f"{width}x{height}"
     else:
         size_str = f"{width}x{height}（編輯輸出實際跟隨輸入圖）"
-    msg = f"workflow={cfg['file'].name}, 圖片={input_images}, size={size_str}, seed={seed}"
+    mode = "去背(RGBA)" if args.remove_bg else "生成/編輯"
+    msg = f"mode={mode}, workflow={cfg['file'].name}, 圖片={input_images}, size={size_str}, seed={seed}"
     if created_nodes:
         msg += f", 新增 LoadImage 節點={created_nodes}"
     print(msg)
