@@ -1,14 +1,14 @@
 ---
-name: comfyui-image-gen
-description: Generate or edit images via the local ComfyUI Qwen-Image server using comfy_client.py. Covers text-to-image, single-image editing, and 2-3 image composition. Use for image generation or editing requests in the comfyui-qwenedit project.
+name: comfyui-qwen-image-gen
+description: Generate or edit images via the local ComfyUI Qwen Image 2.1 server using comfyui_qwen_image_client.py. Covers text-to-image, single-image editing, and 2-3 image composition. Use for image generation or editing requests in the comfyui-qwenedit project.
 ---
 
-# ComfyUI Image Generation
+# ComfyUI Qwen Image Generation
 
-Drive the local ComfyUI Qwen-Image server through `comfy_client.py` to produce an image: queue a workflow, wait for completion over WebSocket, then download the result.
+Drive the local ComfyUI Qwen Image 2.1 server through `comfyui_qwen_image_client.py` to produce an image: queue a workflow, wait for completion over WebSocket, then download the result.
 
 ## Prerequisites
-- Run from the current skill folder containing `comfy_client.py`, the `image_qwen_*.json` workflows, and `input/` + `output/`. The script resolves paths relative to the current directory.
+- Run from the current skill folder containing `comfyui_qwen_image_client.py`, the `1text_to_image.json` / `1image_to_image.json` / `2image_to_image.json` / `3image_to_image.json` workflows, and `input/` + `output/`. The script resolves paths relative to the current directory.
 - Interpreter (project virtualenv): Windows `.venv\Scripts\python.exe`; POSIX `.venv/bin/python`.
 - The ComfyUI server must be reachable. Base URL = `COMFYUI_BASE_URL` env var.
 
@@ -17,12 +17,14 @@ The workflow is chosen by the number of input images, then prompt/seed/size/imag
 
 | Images | Workflow | Mode |
 |---|---|---|
-| 0 | `image_qwen_Image_2512(no_image).json` | text-to-image |
-| 1 | `image_qwen_image_edit_2511(input_image1).json` | single-image edit |
-| 2 | `image_qwen_image_edit_2511(input_image2).json` | 2-image composition |
-| 3 | `image_qwen_image_edit_2511(input_image3).json` | 3-image composition |
+| 0 | `1text_to_image.json` | text-to-image |
+| 1 | `1image_to_image.json` | single-image edit |
+| 2 | `2image_to_image.json` | 2-image composition |
+| 3 | `3image_to_image.json` | 3-image composition |
 
 Images are ordered and cumulative: `--image2` needs `--image1`; `--image3` needs `--image1` + `--image2`. No images = text-to-image.
+
+Image binding is slot-based: `--imageN` maps to the `images.image_N` input of the Qwen image-encode node. Missing LoadImage slots in a workflow JSON are created automatically by the script.
 
 ## Output location
 Default output lands in the project root `output/` folder, which is usually outside the Codex app workspace and therefore NOT displayable in chat.
@@ -32,22 +34,22 @@ After generation, show the result to the user with a Markdown image tag using th
 ## Usage
 Text-to-image:
 ```
-.venv\Scripts\python.exe comfy_client.py --prompt "a red leather sofa, studio lighting" --width 1024 --height 1024 --output WORKSPACE\output\sofa.png
+.venv\Scripts\python.exe comfyui_qwen_image_client.py --prompt "a red leather sofa, studio lighting" --width 1024 --height 1024 --output WORKSPACE\output\sofa.png
 ```
 
 Single image (edit image 1):
 ```
-.venv\Scripts\python.exe comfy_client.py --image1 sofa.png --prompt "change the sofa material to fur"
+.venv\Scripts\python.exe comfyui_qwen_image_client.py --image1 sofa.png --prompt "change the sofa material to fur"
 ```
 
 Two images (image 2 is a reference for image 1):
 ```
-.venv\Scripts\python.exe comfy_client.py --image1 sofa.png --image2 fur.png --prompt "replace the leather in image 1 with the fur texture in image 2"
+.venv\Scripts\python.exe comfyui_qwen_image_client.py --image1 sofa.png --image2 fur.png --prompt "replace the leather in image 1 with the fur texture in image 2"
 ```
 
 Three images:
 ```
-.venv\Scripts\python.exe comfy_client.py --image1 a.png --image2 b.png --image3 c.png --prompt "combine these as described"
+.venv\Scripts\python.exe comfyui_qwen_image_client.py --image1 a.png --image2 b.png --image3 c.png --prompt "combine these as described"
 ```
 
 ## Arguments
@@ -56,7 +58,7 @@ Three images:
 | `--prompt` | yes | Text-to-image: generation description. Editing: how to use the other image(s) to process image 1. |
 | `--image1` | no | Primary image (what is produced/edited from). Omit all images for text-to-image. |
 | `--image2`, `--image3` | no | Extra reference images (cumulative order). |
-| `--width`, `--height` | no | Output size. Default: first image's dimensions, else 1024x1024. |
+| `--width`, `--height` | no | Output size (text-to-image only; default 1024x1024). With images, output follows the first input image. |
 | `--seed` | no | Seed; negative or omitted = random. |
 | `--output` | no | Output path; default `output/<timestamp>.png`. |
 

@@ -1,22 +1,24 @@
 """
-ComfyUI API client — Method 2: WebSocket + History (Monitor Completion)
+ComfyUI API client — Qwen Image 2.1（workflow: 1text/1image/2image/3image_to_image.json）
 
-用法：輸入 0~3 張圖片 + 一段提示詞 → 輸出一張圖片（0 張 = 純文生圖）
-
-  python comfy_client.py [--image1 <圖1>] [--image2 <圖2>] [--image3 <圖3>] --prompt "提示詞" [--width W] [--height H] [--seed -1] [--output out.png]
+用法：輸入 0~3 張圖片 + 一段提示詞 → 输出一張圖片（0 張 = 純文生圖）
+  python comfyui_qwen_image_client.py [--image1 <圖>] [--image2 <圖>] [--image3 <圖>] --prompt "提示詞" [--width W] [--height H] [--seed -1] [--output out.png]
 
   --image1 / --image2 / --image3 解析順序（從專案目錄執行）：
     1. 本機路徑（相對或絕對），例：input/sofa.png 或 C:/path/sofa.png → 自動上傳
     2. 專案 input/ 資料夾：--image1 sofa.png 會找 input/sofa.png → 自動上傳
     3. 已存在 ComfyUI input/ 的檔名；三者都沒有會報錯
-
   依輸入的圖片數量自動選擇 workflow：
-    0 張 → image_qwen_Image_2512(no_image).json（純文生圖）
-    1 張 → image_qwen_image_edit_2511(input_image1).json
-    2 張 → image_qwen_image_edit_2511(input_image2).json
-    3 張 → image_qwen_image_edit_2511(input_image3).json
+    0 張 → 1text_to_image.json（純文生圖）
+    1 張 → 1image_to_image.json
+    2 張 → 2image_to_image.json
+    3 張 → 3image_to_image.json
 
-  --width / --height（選用）：輸出解析度。省略時：有第一張圖=跟它一致；沒有圖（純文生圖）=1024x1024
+  圖片以 images.image_1 / image_2 / image_3 槽位依序對應 --image1/2/3；
+  workflow 裡沒接好的槽位會自動新增 LoadImage 節點補上。
+
+  --width / --height（僅文生圖適用）：輸出解析度，預設 1024x1024；
+  有圖片時輸出實際跟隨輸入圖（由 TextEncodeQwenImage21 決定）。
   提示詞：純文生圖時是生成描述；有圖片時說明「如何用其餘圖片去處理圖1」。
   例：--prompt "把圖1中的皮革沙發材質，替換成圖2中的毛皮材質"
 """
@@ -39,43 +41,38 @@ WS_BASE = HTTP_BASE.replace("http://", "ws://").replace("https://", "wss://")
 
 WORKFLOW_CONFIG = {
     0: dict(
-        file=Path("image_qwen_Image_2512(no_image).json"),
-        prompt_node="238:227", prompt_field="text",
-        ksampler="238:230",
+        file=Path("1text_to_image.json"),
+        prompt_node="452", prompt_field="prompt",
+        ksampler="458",
         load_nodes=[],
-        size_node="238:232",
+        size_node="456",  # EmptyLatentImage（寬高由 ResolutionSelector 供，指定時改寫為數值）
     ),
     1: dict(
-        file=Path("image_qwen_image_edit_2511(input_image1).json"),
-        prompt_node="170:151", prompt_field="prompt",
-        ksampler="170:169",
-        load_nodes=["41"],
+        file=Path("1image_to_image.json"),
+        prompt_node="459:474", prompt_field="prompt",
+        ksampler="459:458",
+        load_nodes=["470"],
         size_node=None,
     ),
     2: dict(
-        file=Path("image_qwen_image_edit_2511(input_image2).json"),
-        prompt_node="170:151", prompt_field="prompt",
-        ksampler="170:169",
-        load_nodes=["41", "83"],
+        file=Path("2image_to_image.json"),
+        prompt_node="459:474", prompt_field="prompt",
+        ksampler="459:458",
+        load_nodes=["470"],  # 缺的 image_2 槽由 bind_images 動態新增
         size_node=None,
     ),
     3: dict(
-        file=Path("image_qwen_image_edit_2511(input_image3).json"),
-        prompt_node="170:151", prompt_field="prompt",
-        ksampler="170:169",
-        load_nodes=["41", "83", "196"],
+        file=Path("3image_to_image.json"),
+        prompt_node="459:474", prompt_field="prompt",
+        ksampler="459:458",
+        load_nodes=["470", "475"],  # 缺的 image_3 槽由 bind_images 動態新增
         size_node=None,
     ),
 }
 LOCAL_INPUT_DIR = Path("input")  # 專案裡的 input/ 資料夾
 OUTPUT_DIR = Path("output")
 
-# ===== 各 workflow 的節點 id（於 WORKFLOW_CONFIG 中引用）=====
-# 文生圖 no_image：CLIPTextEncode 正向=238:227、KSampler=238:230
-# 編輯 input_image1/2/3：TextEncodeQwenImageEditPlus=170:151、KSampler=170:169
-# LoadImage：圖片1=41、圖片2=83、圖片3=196（僅 input_image3 workflow 有）
-
-SEED_MAX = 2 ** 32 - 1  # 隨機種子上限（落在 min=0 ~ max 內）
+SEED_MAX = 2 ** 32 - 1  # 隨機種子上限（落在 min=0 ~ max 間）
 
 
 def remote_image_exists(name: str) -> bool:
@@ -117,7 +114,7 @@ def resolve_image(value: str) -> str:
     name = Path(value).name
     if not remote_image_exists(name):
         raise SystemExit(
-            f"找不到圖片 {name}：請確認 {value} 或 {LOCAL_INPUT_DIR}/{name} 存在（讓腳本上傳），"
+            f"找不到圖片 {name}：請確認 {value} 或 {LOCAL_INPUT_DIR}/{name} 存在（要上傳本檔），"
             f"或先把它放進 ComfyUI 的 input/ 資料夾"
         )
     print(f"使用既有 input 檔：{name}")
@@ -201,15 +198,49 @@ def image_dimensions(value: str):
     return None, None
 
 
+def _new_load_image_node(wf: dict, image_name: str) -> str:
+    """在 workflow 裡新增一個 LoadImage 節點，回傳節點 id。"""
+    node_id = 900
+    while str(node_id) in wf:
+        node_id += 1
+    wf[str(node_id)] = {"class_type": "LoadImage", "inputs": {"image": image_name}}
+    return str(node_id)
+
+
+def bind_images(wf: dict, prompt_node_id: str, image_names: list) -> list:
+    """把第 1~N 張圖依序綁到 TextEncodeQwenImage21 的 images.image_N 槽位。
+
+    已接好線（既有 LoadImage）→ 直接改檔名；
+    缺的槽位（如 2image workflow 沒接 image_2）→ 動態新增 LoadImage 節點並接線。
+    回傳新增的節點 id 清單（供列印提示）。
+    """
+    inputs = wf[prompt_node_id]["inputs"]
+    wiring = {}  # slot -> 既有 LoadImage node id
+    for key, val in inputs.items():
+        if key.startswith("images.image_") and isinstance(val, list):
+            wiring[int(key.rsplit("_", 1)[1])] = val[0]
+    created = []
+    for slot, name in enumerate(image_names, start=1):
+        key = f"images.image_{slot}"
+        node_id = wiring.get(slot)
+        if node_id is None:
+            node_id = _new_load_image_node(wf, name)
+            inputs[key] = [node_id, 0]
+            created.append(node_id)
+        else:
+            wf[node_id]["inputs"]["image"] = name
+    return created
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="輸入 0~3 張圖片 + 一段提示詞，用 ComfyUI 輸出一張圖片（0 張=純文生圖）"
+        description="輸入 0~3 張圖片 + 一段提示詞，用 ComfyUI（Qwen Image 2.1）輸出一張圖片（0 張=純文生圖）"
     )
     parser.add_argument("--image1", default=None, help="圖片1：本機路徑或 ComfyUI 檔名（主要被編輯的圖；省略=純文生圖）")
     parser.add_argument("--image2", default=None, help="圖片2：本機路徑或 ComfyUI 檔名（參考／材質圖，選用）")
     parser.add_argument("--image3", default=None, help="圖片3：本機路徑或 ComfyUI 檔名（參考圖，選用）")
-    parser.add_argument("--width", type=int, default=None, help="輸出寬度；省略=第一張圖寬度（無圖時 1024）")
-    parser.add_argument("--height", type=int, default=None, help="輸出高度；省略=第一張圖高度（無圖時 1024）")
+    parser.add_argument("--width", type=int, default=None, help="輸出寬度（僅文生圖生效；預設 1024）")
+    parser.add_argument("--height", type=int, default=None, help="輸出高度（僅文生圖生效；預設 1024）")
     parser.add_argument("--prompt", required=True, help="提示詞：說明如何用其餘圖片處理圖1（必要）")
     parser.add_argument("--seed", type=int, default=-1, help="隨機種子；負數或省略=隨機")
     parser.add_argument("--output", default=None, help="輸出檔名/路徑（預設 output/時間戳.png）")
@@ -219,11 +250,11 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # 累積順序檢查：提供較後的圖時，前面的圖也必須提供
+    # 累加順序檢查：提供後面的圖時，前面的圖也必須提供
     if args.image2 is not None and args.image1 is None:
-        raise SystemExit("提供 --image2 時也必須提供 --image1（workflow 為累積式）")
+        raise SystemExit("提供 --image2 時也必須提供 --image1（workflow 為累加式）")
     if args.image3 is not None and (args.image1 is None or args.image2 is None):
-        raise SystemExit("提供 --image3 時也必須提供 --image1 與 --image2（workflow 為累積式）")
+        raise SystemExit("提供 --image3 時也必須提供 --image1 與 --image2（workflow 為累加式）")
 
     image_count = sum(v is not None for v in (args.image1, args.image2, args.image3))
 
@@ -237,7 +268,7 @@ def main():
     input_images = [resolve_image(v) for v in (args.image1, args.image2, args.image3) if v is not None]
     seed = args.seed if args.seed >= 0 else random.randint(0, SEED_MAX)
 
-    # 預設輸出解析度：有第一張圖=跟它一致；沒有（純文生圖）=1024x1024
+    # 預設輸出解析度：有第一張圖=跟它一致（僅顯示用）；沒有（純文生圖）=1024x1024
     if args.image1 is not None:
         dw, dh = image_dimensions(args.image1)
         width_default, height_default = dw or 1024, dh or 1024
@@ -246,8 +277,8 @@ def main():
     width = args.width if args.width is not None else width_default
     height = args.height if args.height is not None else height_default
 
-    for node_id, img in zip(cfg["load_nodes"], input_images):
-        prompt[node_id]["inputs"]["image"] = img
+    # 綁定輸入圖片（槽位 1~N 對應 images.image_N，缺的自動補 LoadImage 節點）
+    created_nodes = bind_images(prompt, cfg["prompt_node"], input_images) if image_count else []
 
     prompt[cfg["prompt_node"]]["inputs"][cfg["prompt_field"]] = args.prompt
     prompt[cfg["ksampler"]]["inputs"]["seed"] = seed
@@ -258,7 +289,10 @@ def main():
         size_str = f"{width}x{height}"
     else:
         size_str = f"{width}x{height}（編輯輸出實際跟隨輸入圖）"
-    print(f"workflow={cfg['file'].name}, 圖片={input_images}, size={size_str}, seed={seed}")
+    msg = f"workflow={cfg['file'].name}, 圖片={input_images}, size={size_str}, seed={seed}"
+    if created_nodes:
+        msg += f", 新增 LoadImage 節點={created_nodes}"
+    print(msg)
 
     client_id = str(uuid.uuid4())
     state = {"prompt_id": None, "done": False, "error": None}
@@ -309,7 +343,7 @@ def main():
     if not state["done"]:
         raise SystemExit("未完成就斷線了")
 
-    # 取得歷史（加 retry 防競態：WS 完成事件先於 history 寫入的情況）
+    # 取得歷史（加 retry 防守態：WS 完成事件早於 history 寫入的情況）
     entry = {}
     for _ in range(10):
         hist = requests.get(f"{HTTP_BASE}/history/{state['prompt_id']}").json()
@@ -323,7 +357,7 @@ def main():
         for img in out.get("images", []):
             images.append(img)
     if not images:
-        raise SystemExit("history 沒有輸出圖片。若無結果，可把 PreviewImage 節點改成 SaveImage。")
+        raise SystemExit("history 沒有輸出圖片。若無結果，可把 PreviewImage 節點改存為 SaveImage。")
 
     # 輸出「一張」圖片
     if args.output:
